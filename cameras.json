@@ -1,0 +1,17 @@
+{
+    "store_path": "test",
+    "cameras": [
+        {
+            "name": "hutong",
+            "rtsp": "<real rtsp url>",
+            "protocol": "tcp",
+            "interval": 10
+        },
+        {
+            "name": "yuanzi",
+            "rtsp": "<real rtsp url>",
+            "protocol": "udp",
+            "interval": 10
+        }
+    ]
+}
