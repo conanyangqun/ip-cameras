@@ -1,17 +1,28 @@
 {
     "store_path": "test",
+    "dingtalk": {
+        "enabled": false,
+        "webhook": "https://oapi.dingtalk.com/robot/send?access_token=xxxxxxxx",
+        "secret": "SECxxxxxxxxxxxxxxxx",
+        "notify_cooldown": 300,
+        "max_per_minute": 20
+    },
     "cameras": [
         {
             "name": "hutong",
             "rtsp": "<real rtsp url>",
             "protocol": "tcp",
-            "interval": 10
+            "capture_cycle": 3,
+            "timelapse_interval": 60,
+            "motion_interval": 5
         },
         {
             "name": "yuanzi",
             "rtsp": "<real rtsp url>",
             "protocol": "udp",
-            "interval": 10
+            "capture_cycle": 3,
+            "timelapse_interval": 60,
+            "motion_interval": 5
         }
     ]
 }

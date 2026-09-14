@@ -2,10 +2,15 @@ import json
 import os
 import time
 import logging
-from datetime import datetime
-import cv2
+import threading
 import subprocess
+from datetime import datetime
+
+import cv2
 import numpy as np
+
+from human_detection import detect_humans
+from dingtalk import DingTalkNotifier
 
 # 配置日志
 logging.basicConfig(
@@ -19,6 +24,10 @@ logging.basicConfig(
 
 # 读取配置文件
 def load_config():
+    """
+    读取cameras.json配置文件
+    返回配置字典
+    """
     try:
         with open('cameras.json', 'r', encoding='utf-8') as f:
             config = json.load(f)
@@ -29,6 +38,10 @@ def load_config():
 
 # 创建存储目录
 def ensure_store_dir(store_path):
+    """
+    确保存储目录可用
+    不存在时创建
+    """
     if not os.path.exists(store_path):
         try:
             os.makedirs(store_path)
@@ -41,7 +54,7 @@ def ensure_store_dir(store_path):
 def capture_frame(rtsp_url, protocol=None):
     try:
         logging.info(f"尝试打开RTSP流: {rtsp_url}, 协议: {protocol}")
-        
+
         # 构建ffmpeg命令
         # 使用-t 1只获取1秒的视频
         # 使用-vframes 1只获取1帧
@@ -57,30 +70,30 @@ def capture_frame(rtsp_url, protocol=None):
             '-y',
             'pipe:1'
         ]
-        
+
         # 执行命令并捕获输出
         result = subprocess.run(
             cmd,
             capture_output=True,
             timeout=10  # 设置10秒超时
         )
-        
+
         if result.returncode != 0:
             logging.error(f"ffmpeg执行失败: {result.stderr.decode('utf-8', errors='ignore')}")
             return None
-        
+
         # 将输出转换为numpy数组
         img_data = np.frombuffer(result.stdout, dtype=np.uint8)
         if len(img_data) == 0:
             logging.error(f"ffmpeg未返回图像数据")
             return None
-        
+
         # 解码图像
         frame = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
         if frame is None:
             logging.error(f"无法解码图像数据")
             return None
-        
+
         logging.info(f"成功从RTSP流获取帧: {rtsp_url}")
         return frame
     except subprocess.TimeoutExpired:
@@ -98,12 +111,12 @@ def generate_filename(camera_name):
 # 保存图片
 def save_frame(frame, store_path, filename):
     file_path = os.path.join(store_path, filename)
-    
+
     # 检查文件是否存在
     if os.path.exists(file_path):
         logging.warning(f"文件已存在，跳过保存: {file_path}")
         return False
-    
+
     try:
         cv2.imwrite(file_path, frame)
         logging.info(f"图片已保存: {file_path}")
@@ -113,22 +126,62 @@ def save_frame(frame, store_path, filename):
         return False
 
 # 处理单个摄像头
-def process_camera(camera, store_path):
+def process_camera(camera, store_path, notifier=None):
+    """
+    单个摄像头处理程序
+    params:
+        camera - 摄像头配置
+        store_path - 存储路径
+        notifier - 钉钉通知器
+    """
     name = camera.get('name')
     rtsp = camera.get('rtsp')
     protocol = camera.get('protocol')
-    interval = camera.get('interval', 60)  # 默认60秒
-    
-    logging.info(f"开始处理摄像头: {name}, 间隔: {interval}秒, 协议: {protocol}")
-    
+    # 检测周期：每隔多少秒抓一帧做检测（决定检测灵敏度的最小粒度）
+    capture_cycle = max(camera.get('capture_cycle', 3), 1)
+    timelapse_interval = camera.get('timelapse_interval', 60)
+    motion_interval = camera.get('motion_interval', 5)
+
+    logging.info(
+        f"开始处理摄像头: {name}, 检测周期: {capture_cycle}秒, "
+        f"延时摄影间隔: {timelapse_interval}秒, 人形间隔: {motion_interval}秒, 协议: {protocol}"
+    )
+
+    last_save_time = 0
+
     while True:
-        frame = capture_frame(rtsp, protocol)
+        frame = capture_frame(rtsp, protocol) # 获取当前帧
+        now = time.time()
+
         if frame is not None:
-            filename = generate_filename(name)
-            save_frame(frame, store_path, filename)
-        
-        # 等待指定的间隔时间
-        time.sleep(interval)
+            # 人形检测
+            try:
+                boxes = detect_humans(frame)
+            except Exception as e:
+                logging.error(f"人形检测出错: {e}")
+                boxes = []
+            motion = len(boxes) > 0
+
+            if motion:
+                # 检测到人形
+                logging.info(f"摄像头 {name} 检测到人形，数量: {len(boxes)}")
+                # 检测到人形时发送钉钉通知（内部带冷却时间和限流）
+                if notifier:
+                    try:
+                        notifier.send_motion_alert(name, len(boxes))
+                    except Exception as e:
+                        logging.error(f"发送钉钉通知出错: {e}")
+
+            # 根据是否检测到人形选择保存间隔
+            interval = motion_interval if motion else timelapse_interval
+            if now - last_save_time >= interval:
+                filename = generate_filename(name)
+                if save_frame(frame, store_path, filename):
+                    last_save_time = now
+
+        # 等待下一个检测周期
+        time.sleep(capture_cycle)
+
 
 if __name__ == "__main__":
     try:
@@ -136,24 +189,40 @@ if __name__ == "__main__":
         config = load_config()
         store_path = config.get('store_path', 'test')
         cameras = config.get('cameras', [])
-        
+
         # 创建存储目录
         ensure_store_dir(store_path)
-        
+
+        # 初始化钉钉机器人通知器
+        notifier = None
+        dingtalk_cfg = config.get('dingtalk', {})
+        if dingtalk_cfg.get('enabled'):
+            # 启用dingtalk机器人
+            webhook = dingtalk_cfg.get('webhook')
+            if webhook:
+                notifier = DingTalkNotifier(
+                    webhook=webhook,
+                    secret=dingtalk_cfg.get('secret'),
+                    notify_cooldown=dingtalk_cfg.get('notify_cooldown', 300),
+                    max_per_minute=dingtalk_cfg.get('max_per_minute', 20),
+                )
+                logging.info("钉钉机器人通知已启用")
+            else:
+                logging.warning("已启用钉钉通知但未配置 webhook，通知功能不可用")
+
         # 启动多个线程处理不同的摄像头
-        import threading
         threads = []
-        
+
         for camera in cameras:
-            thread = threading.Thread(target=process_camera, args=(camera, store_path))
+            thread = threading.Thread(target=process_camera, args=(camera, store_path, notifier))
             thread.daemon = True
             threads.append(thread)
             thread.start()
-        
+
         # 主线程保持运行
         while True:
             time.sleep(1)
-            
+
     except KeyboardInterrupt:
         logging.info("程序被用户中断")
     except Exception as e:
