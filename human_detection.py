@@ -15,6 +15,71 @@ def get_hog_detector():
     return _hog
 
 
+# YOLO 检测方法
+DEFAULT_YOLO_MODEL = 'yolov8n.onnx'
+# YOLO 输入尺寸（越小越快，416 兼顾速度与精度）
+YOLO_INPUT_SIZE = 416
+# person 置信度阈值
+YOLO_CONF_THRESHOLD = 0.4
+
+# YOLO 网络加载较慢，全局缓存，避免重复初始化
+_yolo_net = None
+_yolo_model_path = None
+
+
+def get_yolo_detector(model_path=DEFAULT_YOLO_MODEL):
+    """加载并缓存 YOLO ONNX 模型"""
+    global _yolo_net, _yolo_model_path
+    if _yolo_net is None or _yolo_model_path != model_path:
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"YOLO 模型文件不存在: {model_path}，"
+                f"请先导出或下载，例如: yolo export format=onnx imgsz={YOLO_INPUT_SIZE}"
+            )
+        _yolo_net = cv2.dnn.readNetFromONNX(model_path)
+        _yolo_model_path = model_path
+    return _yolo_net
+
+
+def detect_humans_yolo(image, model_path=DEFAULT_YOLO_MODEL):
+    """
+    用 YOLO nano ONNX 模型检测人形，返回检测框列表 [(x, y, w, h), ...]
+    模型输出类别索引 0 为 person
+    """
+    if image is None:
+        return []
+
+    net = get_yolo_detector(model_path)
+    ih, iw = image.shape[:2]
+    input_size = YOLO_INPUT_SIZE
+
+    blob = cv2.dnn.blobFromImage(image, 1.0 / 255.0, (input_size, input_size),
+                                 swapRB=True, crop=False)
+    net.setInput(blob)
+    output = net.forward()  # (1, 4+80, num_anchors)
+    preds = output[0].T     # (num_anchors, 4+80)
+
+    # person 类别（索引 0）的置信度过滤
+    person_scores = preds[:, 4]
+    mask = person_scores > YOLO_CONF_THRESHOLD
+    if not np.any(mask):
+        return []
+
+    # cxcywh（输入尺寸）-> xywh（原图尺寸）
+    b = preds[mask, :4]
+    scale_x = iw / input_size
+    scale_y = ih / input_size
+    boxes = np.stack([
+        (b[:, 0] - b[:, 2] / 2) * scale_x,
+        (b[:, 1] - b[:, 3] / 2) * scale_y,
+        b[:, 2] * scale_x,
+        b[:, 3] * scale_y,
+    ], axis=1)
+
+    # 非极大值抑制去除重叠框
+    return non_max_suppression(boxes.astype("int")).tolist()
+
+
 def non_max_suppression(boxes, overlapThresh=0.4):
     if len(boxes) == 0:
         return []
@@ -71,10 +136,18 @@ def draw_boxes(image, boxes, color=(0, 255, 0), thickness=2, label='person'):
     return annotated
 
 
-def detect_humans(image):
-    """检测图片中的人形，返回过滤后的检测框列表 [(x, y, w, h), ...]"""
+def detect_humans(image, method='hog', yolo_model=DEFAULT_YOLO_MODEL):
+    """
+    检测图片中的人形，返回过滤后的检测框列表 [(x, y, w, h), ...]
+    params:
+        method - 检测方法: hog=HOG+SVM(默认), yolo=YOLO nano ONNX(误报更低)
+        yolo_model - YOLO ONNX 模型文件路径（method=yolo 时使用）
+    """
     if image is None:
         return []
+
+    if method == 'yolo':
+        return detect_humans_yolo(image, model_path=yolo_model)
 
     hog = get_hog_detector()
 
@@ -120,7 +193,7 @@ def detect_humans(image):
     return filtered_rects
 
 
-def detect_humans_in_folder(folder_path):
+def detect_humans_in_folder(folder_path, method='hog', yolo_model=DEFAULT_YOLO_MODEL):
     # 遍历文件夹中的所有图片文件
     for filename in os.listdir(folder_path):
         # 检查文件是否为图片
@@ -133,7 +206,7 @@ def detect_humans_in_folder(folder_path):
                 print(f"无法读取图片: {filename}")
                 continue
 
-            filtered_rects = detect_humans(image)
+            filtered_rects = detect_humans(image, method=method, yolo_model=yolo_model)
 
             # 输出检测结果
             if len(filtered_rects) > 0:
@@ -151,6 +224,10 @@ if __name__ == "__main__":
     # 解析命令行参数
     parser = argparse.ArgumentParser(description='检测文件夹中图片是否包含人形')
     parser.add_argument('folder', type=str, help='包含图片的文件夹路径')
+    parser.add_argument('--method', type=str, choices=['hog', 'yolo'], default='hog',
+                        help='检测方法: hog=HOG+SVM(默认), yolo=YOLO nano ONNX(误报更低)')
+    parser.add_argument('--model', type=str, default=DEFAULT_YOLO_MODEL,
+                        help='YOLO ONNX 模型文件路径，默认为 %s（--method yolo 时使用）' % DEFAULT_YOLO_MODEL)
     args = parser.parse_args()
 
     # 检查文件夹是否存在
@@ -158,4 +235,4 @@ if __name__ == "__main__":
         print(f"错误: 文件夹 {args.folder} 不存在")
     else:
         # 开始检测
-        detect_humans_in_folder(args.folder)
+        detect_humans_in_folder(args.folder, method=args.method, yolo_model=args.model)
