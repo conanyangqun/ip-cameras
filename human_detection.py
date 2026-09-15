@@ -51,6 +51,26 @@ def non_max_suppression(boxes, overlapThresh=0.4):
     return boxes[pick].astype("int")
 
 
+# 在图像上绘制人形检测框
+def draw_boxes(image, boxes, color=(0, 255, 0), thickness=2, label='person'):
+    """
+    在图像副本上绘制检测框及标签，返回标注后的图像（不修改原图）
+    params:
+        image - 原始图像
+        boxes - 检测框列表 [(x, y, w, h), ...]
+        color - 框和标签颜色（BGR）
+        thickness - 线宽
+        label - 标签文本，为空时不绘制
+    """
+    annotated = image.copy()
+    for (x, y, w, h) in boxes:
+        cv2.rectangle(annotated, (x, y), (x + w, y + h), color, thickness)
+        if label:
+            cv2.putText(annotated, label, (x, max(y - 6, 12)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, thickness)
+    return annotated
+
+
 def detect_humans(image):
     """检测图片中的人形，返回过滤后的检测框列表 [(x, y, w, h), ...]"""
     if image is None:
@@ -118,12 +138,10 @@ def detect_humans_in_folder(folder_path):
             # 输出检测结果
             if len(filtered_rects) > 0:
                 print(f"图片 {filename} 中检测到人形，数量: {len(filtered_rects)}")
-                # 在图片上绘制检测框
-                for (x, y, w, h) in filtered_rects:
-                    cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                # 保存带有检测框的图片
+                # 在图片上绘制检测框并保存
+                annotated = draw_boxes(image, filtered_rects)
                 output_path = os.path.join(folder_path, f"detected_{filename}")
-                cv2.imwrite(output_path, image)
+                cv2.imwrite(output_path, annotated)
                 print(f"带有检测框的图片已保存为: detected_{filename}")
             else:
                 print(f"图片 {filename} 中未检测到人形")

@@ -9,7 +9,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 
-from human_detection import detect_humans
+from human_detection import detect_humans, draw_boxes
 from dingtalk import DingTalkNotifier
 
 # 配置日志
@@ -104,9 +104,10 @@ def capture_frame(rtsp_url, protocol=None):
         return None
 
 # 生成文件名
-def generate_filename(camera_name):
+def generate_filename(camera_name, suffix=None):
     timestamp = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
-    return f"camera_{camera_name}_{timestamp}.jpg"
+    tag = f"_{suffix}" if suffix else ""
+    return f"camera_{camera_name}_{timestamp}{tag}.jpg"
 
 # 保存图片
 def save_frame(frame, store_path, filename):
@@ -162,6 +163,18 @@ def process_camera(camera, store_path, notifier=None):
                 boxes = []
             motion = len(boxes) > 0
 
+            # 根据是否检测到人形选择保存间隔
+            interval = motion_interval if motion else timelapse_interval
+            if now - last_save_time >= interval:
+                filename = generate_filename(name)
+                if save_frame(frame, store_path, filename):
+                    last_save_time = now
+                    # 检测到人形时，额外保存带矩形框标注的图像
+                    if motion:
+                        annotated_filename = generate_filename(name, suffix='detected')
+                        if save_frame(draw_boxes(frame, boxes), store_path, annotated_filename):
+                            logging.info(f"标注图已保存: {annotated_filename}")
+
             if motion:
                 # 检测到人形
                 logging.info(f"摄像头 {name} 检测到人形，数量: {len(boxes)}")
@@ -171,13 +184,6 @@ def process_camera(camera, store_path, notifier=None):
                         notifier.send_motion_alert(name, len(boxes))
                     except Exception as e:
                         logging.error(f"发送钉钉通知出错: {e}")
-
-            # 根据是否检测到人形选择保存间隔
-            interval = motion_interval if motion else timelapse_interval
-            if now - last_save_time >= interval:
-                filename = generate_filename(name)
-                if save_frame(frame, store_path, filename):
-                    last_save_time = now
 
         # 等待下一个检测周期
         time.sleep(capture_cycle)
