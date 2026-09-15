@@ -16,11 +16,11 @@ def get_hog_detector():
 
 
 # YOLO 检测方法
-DEFAULT_YOLO_MODEL = 'yolov8n.onnx'
+DEFAULT_YOLO_MODEL = 'yolo26n.onnx'
 # YOLO 输入尺寸（越小越快，416 兼顾速度与精度）
-YOLO_INPUT_SIZE = 416
+YOLO_INPUT_SIZE = 640
 # person 置信度阈值
-YOLO_CONF_THRESHOLD = 0.4
+YOLO_CONF_THRESHOLD = 0.25
 
 # YOLO 网络加载较慢，全局缓存，避免重复初始化
 _yolo_net = None

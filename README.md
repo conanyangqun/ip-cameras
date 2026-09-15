@@ -30,6 +30,8 @@ pip install -r requirements.txt
 ```jsonc
 {
     "store_path": "test",              // 截图保存目录
+    "detection_method": "hog",         // 人形检测方法: hog=HOG+SVM(默认), yolo=YOLO ONNX(误报更低、更准)
+    "yolo_model": "yolo26n.onnx",      // YOLO ONNX 模型文件路径（detection_method 为 yolo 时使用）
     "dingtalk": {                      // 钉钉机器人配置（可选）
         "enabled": false,              // 是否启用钉钉通知
         "webhook": "https://oapi.dingtalk.com/robot/send?access_token=xxxxxxxx",

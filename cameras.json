@@ -1,5 +1,7 @@
 {
     "store_path": "test",
+    "detection_method": "hog",
+    "yolo_model": "/xxx/yolo26n.640.onnx",
     "dingtalk": {
         "enabled": false,
         "webhook": "https://oapi.dingtalk.com/robot/send?access_token=xxxxxxxx",

@@ -9,7 +9,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 
-from human_detection import detect_humans, draw_boxes
+from human_detection import detect_humans, draw_boxes, DEFAULT_YOLO_MODEL
 from dingtalk import DingTalkNotifier
 
 # 配置日志
@@ -127,13 +127,16 @@ def save_frame(frame, store_path, filename):
         return False
 
 # 处理单个摄像头
-def process_camera(camera, store_path, notifier=None):
+def process_camera(camera, store_path, notifier=None,
+                   detection_method='hog', yolo_model=DEFAULT_YOLO_MODEL):
     """
     单个摄像头处理程序
     params:
         camera - 摄像头配置
         store_path - 存储路径
         notifier - 钉钉通知器
+        detection_method - 检测方法: hog / yolo
+        yolo_model - YOLO ONNX 模型文件路径（method=yolo 时使用）
     """
     name = camera.get('name')
     rtsp = camera.get('rtsp')
@@ -157,7 +160,7 @@ def process_camera(camera, store_path, notifier=None):
         if frame is not None:
             # 人形检测
             try:
-                boxes = detect_humans(frame)
+                boxes = detect_humans(frame, method=detection_method, yolo_model=yolo_model)
             except Exception as e:
                 logging.error(f"人形检测出错: {e}")
                 boxes = []
@@ -199,6 +202,20 @@ if __name__ == "__main__":
         # 创建存储目录
         ensure_store_dir(store_path)
 
+        # 读取检测方法配置
+        detection_method = config.get('detection_method', 'hog')
+        if detection_method not in ('hog', 'yolo'):
+            logging.error(f"无效的检测方法: {detection_method}，可选: hog / yolo")
+            raise SystemExit(1)
+        yolo_model = config.get('yolo_model', DEFAULT_YOLO_MODEL)
+        if detection_method == 'yolo' and not os.path.exists(yolo_model):
+            logging.error(f"检测方法为 yolo 但模型文件不存在: {yolo_model}，请先导出或下载")
+            raise SystemExit(1)
+        if detection_method == 'yolo':
+            logging.info(f"检测方法: yolo, 模型: {yolo_model}")
+        else:
+            logging.info("检测方法: hog")
+
         # 初始化钉钉机器人通知器
         notifier = None
         dingtalk_cfg = config.get('dingtalk', {})
@@ -220,7 +237,9 @@ if __name__ == "__main__":
         threads = []
 
         for camera in cameras:
-            thread = threading.Thread(target=process_camera, args=(camera, store_path, notifier))
+            thread = threading.Thread(target=process_camera,
+                                      args=(camera, store_path, notifier,
+                                            detection_method, yolo_model))
             thread.daemon = True
             threads.append(thread)
             thread.start()
