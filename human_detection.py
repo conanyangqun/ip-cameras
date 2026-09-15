@@ -76,8 +76,19 @@ def detect_humans_yolo(image, model_path=DEFAULT_YOLO_MODEL):
         b[:, 3] * scale_y,
     ], axis=1)
 
+    # 丢弃含 NaN/Inf 的无效检测框（坏帧可能导致模型输出异常值）
+    boxes = boxes[np.all(np.isfinite(boxes), axis=1)]
+    if len(boxes) == 0:
+        return []
+
+    # 将坐标裁剪到图像范围内，宽高至少为 1，确保后续绘制不会溢出
+    boxes[:, 0] = np.clip(boxes[:, 0], 0, iw - 1)
+    boxes[:, 1] = np.clip(boxes[:, 1], 0, ih - 1)
+    boxes[:, 2] = np.clip(boxes[:, 2], 1, iw - boxes[:, 0])
+    boxes[:, 3] = np.clip(boxes[:, 3], 1, ih - boxes[:, 1])
+
     # 非极大值抑制去除重叠框
-    return non_max_suppression(boxes.astype("int")).tolist()
+    return non_max_suppression(np.rint(boxes).astype("int")).tolist()
 
 
 def non_max_suppression(boxes, overlapThresh=0.4):
@@ -129,6 +140,7 @@ def draw_boxes(image, boxes, color=(0, 255, 0), thickness=2, label='person'):
     """
     annotated = image.copy()
     for (x, y, w, h) in boxes:
+        x, y, w, h = int(x), int(y), int(w), int(h)
         cv2.rectangle(annotated, (x, y), (x + w, y + h), color, thickness)
         if label:
             cv2.putText(annotated, label, (x, max(y - 6, 12)),
