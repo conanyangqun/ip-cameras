@@ -16,7 +16,8 @@
             "protocol": "tcp",
             "capture_cycle": 3,
             "timelapse_interval": 60,
-            "motion_interval": 5
+            "motion_interval": 5,
+            "human_detection": true
         },
         {
             "name": "yuanzi",
@@ -24,7 +25,8 @@
             "protocol": "udp",
             "capture_cycle": 3,
             "timelapse_interval": 60,
-            "motion_interval": 5
+            "motion_interval": 5,
+            "human_detection": false
         }
     ]
 }

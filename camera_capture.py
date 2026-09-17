@@ -141,13 +141,16 @@ def process_camera(camera, store_path, notifier=None,
     name = camera.get('name')
     rtsp = camera.get('rtsp')
     protocol = camera.get('protocol')
+    # 是否开启人形检测（未配置时默认开启）
+    human_detection = camera.get('human_detection', True)
     # 检测周期：每隔多少秒抓一帧做检测（决定检测灵敏度的最小粒度）
     capture_cycle = max(camera.get('capture_cycle', 3), 1)
     timelapse_interval = camera.get('timelapse_interval', 60)
     motion_interval = camera.get('motion_interval', 5)
 
     logging.info(
-        f"开始处理摄像头: {name}, 检测周期: {capture_cycle}秒, "
+        f"开始处理摄像头: {name}, 人形检测: {'开启' if human_detection else '关闭'}, "
+        f"检测周期: {capture_cycle}秒, "
         f"延时摄影间隔: {timelapse_interval}秒, 人形间隔: {motion_interval}秒, 协议: {protocol}"
     )
 
@@ -158,13 +161,16 @@ def process_camera(camera, store_path, notifier=None,
         now = time.time()
 
         if frame is not None:
-            # 人形检测
-            try:
-                boxes = detect_humans(frame, method=detection_method, yolo_model=yolo_model)
-            except Exception as e:
-                logging.error(f"人形检测出错: {e}")
-                boxes = []
-            motion = len(boxes) > 0
+            boxes = []
+            motion = False
+            # 人形检测（关闭时跳过，仅按延时摄影间隔保存）
+            if human_detection:
+                try:
+                    boxes = detect_humans(frame, method=detection_method, yolo_model=yolo_model)
+                except Exception as e:
+                    logging.error(f"人形检测出错: {e}")
+                    boxes = []
+                motion = len(boxes) > 0
 
             # 根据是否检测到人形选择保存间隔
             interval = motion_interval if motion else timelapse_interval
