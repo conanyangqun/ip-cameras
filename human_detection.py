@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import os
 import argparse
+import threading
 
 # HOG 检测器加载较慢，全局缓存，避免重复初始化
 _hog = None
@@ -20,11 +21,13 @@ DEFAULT_YOLO_MODEL = 'yolo26n.onnx'
 # YOLO 输入尺寸（越小越快，416 兼顾速度与精度）
 YOLO_INPUT_SIZE = 640
 # person 置信度阈值
-YOLO_CONF_THRESHOLD = 0.25
+YOLO_CONF_THRESHOLD = 0.4
 
 # YOLO 网络加载较慢，全局缓存，避免重复初始化
 _yolo_net = None
 _yolo_model_path = None
+# cv2.dnn.Net 非线程安全，多摄像头线程共享时必须串行化推理，否则结果会被污染
+_yolo_infer_lock = threading.Lock()
 
 
 def get_yolo_detector(model_path=DEFAULT_YOLO_MODEL):
@@ -55,8 +58,9 @@ def detect_humans_yolo(image, model_path=DEFAULT_YOLO_MODEL):
 
     blob = cv2.dnn.blobFromImage(image, 1.0 / 255.0, (input_size, input_size),
                                  swapRB=True, crop=False)
-    net.setInput(blob)
-    output = net.forward()  # (1, 4+80, num_anchors)
+    with _yolo_infer_lock:
+        net.setInput(blob)
+        output = net.forward()  # (1, 4+80, num_anchors)
     preds = output[0].T     # (num_anchors, 4+80)
 
     # person 类别（索引 0）的置信度过滤
