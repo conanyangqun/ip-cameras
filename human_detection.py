@@ -3,6 +3,9 @@ import numpy as np
 import os
 import argparse
 import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 # HOG 检测器加载较慢，全局缓存，避免重复初始化
 _hog = None
@@ -65,6 +68,10 @@ def detect_humans_yolo(image, model_path=DEFAULT_YOLO_MODEL):
 
     # person 类别（索引 0）的置信度过滤
     person_scores = preds[:, 4]
+    # 调试：打印置信度最高的前 10 个分数，用于确定 YOLO_CONF_THRESHOLD 合适取值
+    if len(person_scores) > 0:
+        top_scores = np.sort(person_scores)[::-1][:10]
+        logger.debug("person_scores top10: %s", np.round(top_scores, 4))
     mask = person_scores > YOLO_CONF_THRESHOLD
     if not np.any(mask):
         return []
@@ -219,21 +226,21 @@ def detect_humans_in_folder(folder_path, method='hog', yolo_model=DEFAULT_YOLO_M
             # 读取图片
             image = cv2.imread(image_path)
             if image is None:
-                print(f"无法读取图片: {filename}")
+                logger.error("无法读取图片: %s", filename)
                 continue
 
             filtered_rects = detect_humans(image, method=method, yolo_model=yolo_model)
 
             # 输出检测结果
             if len(filtered_rects) > 0:
-                print(f"图片 {filename} 中检测到人形，数量: {len(filtered_rects)}")
+                logger.info("图片 %s 中检测到人形，数量: %d", filename, len(filtered_rects))
                 # 在图片上绘制检测框并保存
                 annotated = draw_boxes(image, filtered_rects)
                 output_path = os.path.join(folder_path, f"detected_{filename}")
                 cv2.imwrite(output_path, annotated)
-                print(f"带有检测框的图片已保存为: detected_{filename}")
+                logger.info("带有检测框的图片已保存为: detected_%s", filename)
             else:
-                print(f"图片 {filename} 中未检测到人形")
+                logger.info("图片 %s 中未检测到人形", filename)
 
 
 if __name__ == "__main__":
@@ -244,11 +251,19 @@ if __name__ == "__main__":
                         help='检测方法: hog=HOG+SVM(默认), yolo=YOLO nano ONNX(误报更低)')
     parser.add_argument('--model', type=str, default=DEFAULT_YOLO_MODEL,
                         help='YOLO ONNX 模型文件路径，默认为 %s（--method yolo 时使用）' % DEFAULT_YOLO_MODEL)
+    parser.add_argument('--debug', action='store_true',
+                        help='输出 DEBUG 级别日志（打印每张图片的置信度得分，用于调整 YOLO_CONF_THRESHOLD）')
     args = parser.parse_args()
+
+    # 配置日志输出
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format='%(asctime)s %(levelname)s [%(name)s] %(message)s',
+    )
 
     # 检查文件夹是否存在
     if not os.path.isdir(args.folder):
-        print(f"错误: 文件夹 {args.folder} 不存在")
+        logger.error("文件夹 %s 不存在", args.folder)
     else:
         # 开始检测
         detect_humans_in_folder(args.folder, method=args.method, yolo_model=args.model)
