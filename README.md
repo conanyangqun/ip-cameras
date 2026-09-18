@@ -46,7 +46,9 @@ pip install -r requirements.txt
             "protocol": "tcp",         // 传输协议: tcp / udp
             "capture_cycle": 3,        // 检测周期（秒），决定检测灵敏度的最小粒度，需小于 motion_interval
             "timelapse_interval": 60,  // 无人形时的保存间隔（秒）
-            "motion_interval": 5       // 检测到人形时的保存间隔（秒）
+            "motion_interval": 5,      // 检测到人形时的保存间隔（秒）
+            "human_detection": true,   // 是否开启人形检测（默认开启）
+            "human_detection_threshold": 0.4 // 每摄像头报出阈值（可选，默认 hog=0.75 / yolo=0.4）
         }
     ]
 }

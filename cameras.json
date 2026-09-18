@@ -1,6 +1,6 @@
 {
     "store_path": "test",
-    "detection_method": "hog",
+    "detection_method": "yolo",
     "yolo_model": "/xxx/yolo26n.640.onnx",
     "dingtalk": {
         "enabled": false,
@@ -17,7 +17,8 @@
             "capture_cycle": 3,
             "timelapse_interval": 60,
             "motion_interval": 5,
-            "human_detection": true
+            "human_detection": true,
+            "human_detection_threshold": 0.4
         },
         {
             "name": "yuanzi",
@@ -26,7 +27,8 @@
             "capture_cycle": 3,
             "timelapse_interval": 60,
             "motion_interval": 5,
-            "human_detection": false
+            "human_detection": false,
+            "human_detection_threshold": 0.6
         }
     ]
 }

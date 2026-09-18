@@ -143,6 +143,8 @@ def process_camera(camera, store_path, notifier=None,
     protocol = camera.get('protocol')
     # 是否开启人形检测（未配置时默认开启）
     human_detection = camera.get('human_detection', True)
+    # 每摄像头的报出阈值（未配置时使用检测方法的默认值）
+    conf_threshold = camera.get('human_detection_threshold')
     # 检测周期：每隔多少秒抓一帧做检测（决定检测灵敏度的最小粒度）
     capture_cycle = max(camera.get('capture_cycle', 3), 1)
     timelapse_interval = camera.get('timelapse_interval', 60)
@@ -151,7 +153,8 @@ def process_camera(camera, store_path, notifier=None,
     logging.info(
         f"开始处理摄像头: {name}, 人形检测: {'开启' if human_detection else '关闭'}, "
         f"检测周期: {capture_cycle}秒, "
-        f"延时摄影间隔: {timelapse_interval}秒, 人形间隔: {motion_interval}秒, 协议: {protocol}"
+        f"延时摄影间隔: {timelapse_interval}秒, 人形间隔: {motion_interval}秒, "
+        f"协议: {protocol}, 报出阈值: {conf_threshold if conf_threshold is not None else '默认'}"
     )
 
     last_save_time = 0
@@ -166,7 +169,8 @@ def process_camera(camera, store_path, notifier=None,
             # 人形检测（关闭时跳过，仅按延时摄影间隔保存）
             if human_detection:
                 try:
-                    boxes = detect_humans(frame, method=detection_method, yolo_model=yolo_model)
+                    boxes = detect_humans(frame, method=detection_method, yolo_model=yolo_model,
+                                          conf_threshold=conf_threshold)
                 except Exception as e:
                     logging.error(f"人形检测出错: {e}")
                     boxes = []

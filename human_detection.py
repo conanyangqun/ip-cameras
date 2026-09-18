@@ -47,10 +47,12 @@ def get_yolo_detector(model_path=DEFAULT_YOLO_MODEL):
     return _yolo_net
 
 
-def detect_humans_yolo(image, model_path=DEFAULT_YOLO_MODEL):
+def detect_humans_yolo(image, model_path=DEFAULT_YOLO_MODEL, conf_threshold=None):
     """
     用 YOLO nano ONNX 模型检测人形，返回检测框列表 [(x, y, w, h), ...]
     模型输出类别索引 0 为 person
+    params:
+        conf_threshold - person 置信度阈值，为 None 时使用默认值 YOLO_CONF_THRESHOLD
     """
     if image is None:
         return []
@@ -58,6 +60,7 @@ def detect_humans_yolo(image, model_path=DEFAULT_YOLO_MODEL):
     net = get_yolo_detector(model_path)
     ih, iw = image.shape[:2]
     input_size = YOLO_INPUT_SIZE
+    threshold = YOLO_CONF_THRESHOLD if conf_threshold is None else conf_threshold
 
     blob = cv2.dnn.blobFromImage(image, 1.0 / 255.0, (input_size, input_size),
                                  swapRB=True, crop=False)
@@ -72,7 +75,7 @@ def detect_humans_yolo(image, model_path=DEFAULT_YOLO_MODEL):
     if len(person_scores) > 0:
         top_scores = np.sort(person_scores)[::-1][:10]
         logger.debug("person_scores top10: %s", np.round(top_scores, 4))
-    mask = person_scores > YOLO_CONF_THRESHOLD
+    mask = person_scores > threshold
     if not np.any(mask):
         return []
 
@@ -159,18 +162,24 @@ def draw_boxes(image, boxes, color=(0, 255, 0), thickness=2, label='person'):
     return annotated
 
 
-def detect_humans(image, method='hog', yolo_model=DEFAULT_YOLO_MODEL):
+# HOG 默认置信度阈值
+HOG_CONF_THRESHOLD = 0.75
+
+
+def detect_humans(image, method='hog', yolo_model=DEFAULT_YOLO_MODEL, conf_threshold=None):
     """
     检测图片中的人形，返回过滤后的检测框列表 [(x, y, w, h), ...]
     params:
         method - 检测方法: hog=HOG+SVM(默认), yolo=YOLO nano ONNX(误报更低)
         yolo_model - YOLO ONNX 模型文件路径（method=yolo 时使用）
+        conf_threshold - 报出阈值: yolo 为 person 置信度阈值（默认 YOLO_CONF_THRESHOLD），
+                         hog 为检测权重阈值（默认 HOG_CONF_THRESHOLD）
     """
     if image is None:
         return []
 
     if method == 'yolo':
-        return detect_humans_yolo(image, model_path=yolo_model)
+        return detect_humans_yolo(image, model_path=yolo_model, conf_threshold=conf_threshold)
 
     hog = get_hog_detector()
 
@@ -184,10 +193,11 @@ def detect_humans(image, method='hog', yolo_model=DEFAULT_YOLO_MODEL):
     )
 
     # 过滤检测结果，平衡假阳性和漏检
+    weight_threshold = HOG_CONF_THRESHOLD if conf_threshold is None else conf_threshold
     filtered_rects = []
     for (x, y, w, h), weight in zip(rects, weights):
-        # 适度的置信度阈值
-        if weight > 0.75:
+        # 报出阈值（可通过配置按摄像头调整）
+        if weight > weight_threshold:
             # 放宽宽高比范围
             aspect_ratio = h / w
             if aspect_ratio > 1.2 and aspect_ratio < 3.0:
@@ -216,7 +226,8 @@ def detect_humans(image, method='hog', yolo_model=DEFAULT_YOLO_MODEL):
     return filtered_rects
 
 
-def detect_humans_in_folder(folder_path, method='hog', yolo_model=DEFAULT_YOLO_MODEL):
+def detect_humans_in_folder(folder_path, method='hog', yolo_model=DEFAULT_YOLO_MODEL,
+                            conf_threshold=None):
     # 遍历文件夹中的所有图片文件
     for filename in os.listdir(folder_path):
         # 检查文件是否为图片
@@ -229,7 +240,8 @@ def detect_humans_in_folder(folder_path, method='hog', yolo_model=DEFAULT_YOLO_M
                 logger.error("无法读取图片: %s", filename)
                 continue
 
-            filtered_rects = detect_humans(image, method=method, yolo_model=yolo_model)
+            filtered_rects = detect_humans(image, method=method, yolo_model=yolo_model,
+                                           conf_threshold=conf_threshold)
 
             # 输出检测结果
             if len(filtered_rects) > 0:
@@ -251,6 +263,9 @@ if __name__ == "__main__":
                         help='检测方法: hog=HOG+SVM(默认), yolo=YOLO nano ONNX(误报更低)')
     parser.add_argument('--model', type=str, default=DEFAULT_YOLO_MODEL,
                         help='YOLO ONNX 模型文件路径，默认为 %s（--method yolo 时使用）' % DEFAULT_YOLO_MODEL)
+    parser.add_argument('--threshold', type=float, default=None,
+                        help='报出阈值: yolo 为 person 置信度（默认 %.2f），hog 为检测权重（默认 %.2f）'
+                             % (YOLO_CONF_THRESHOLD, HOG_CONF_THRESHOLD))
     parser.add_argument('--debug', action='store_true',
                         help='输出 DEBUG 级别日志（打印每张图片的置信度得分，用于调整 YOLO_CONF_THRESHOLD）')
     args = parser.parse_args()
@@ -266,4 +281,5 @@ if __name__ == "__main__":
         logger.error("文件夹 %s 不存在", args.folder)
     else:
         # 开始检测
-        detect_humans_in_folder(args.folder, method=args.method, yolo_model=args.model)
+        detect_humans_in_folder(args.folder, method=args.method, yolo_model=args.model,
+                                conf_threshold=args.threshold)
