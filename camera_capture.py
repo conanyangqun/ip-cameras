@@ -9,7 +9,9 @@ from datetime import datetime
 import cv2
 import numpy as np
 
-from human_detection import detect_humans, draw_boxes, DEFAULT_YOLO_MODEL
+from human_detection import (detect_humans, draw_boxes, draw_roi, normalize_roi,
+                             as_polygon_list, DEFAULT_YOLO_MODEL,
+                             ROI_MODE_FILTER, ROI_MODE_CROP)
 from dingtalk import DingTalkNotifier
 
 # 配置日志
@@ -128,7 +130,7 @@ def save_frame(frame, store_path, filename):
 
 # 处理单个摄像头
 def process_camera(camera, store_path, notifier=None,
-                   detection_method='hog', yolo_model=DEFAULT_YOLO_MODEL):
+                   detection_method='hog', yolo_model=DEFAULT_YOLO_MODEL, defaults=None):
     """
     单个摄像头处理程序
     params:
@@ -137,7 +139,10 @@ def process_camera(camera, store_path, notifier=None,
         notifier - 钉钉通知器
         detection_method - 检测方法: hog / yolo
         yolo_model - YOLO ONNX 模型文件路径（method=yolo 时使用）
+        defaults - 顶层默认配置（roi / roi_mode / roi_overlap / roi_debug），
+                   摄像头配置中未指定的项从这里回退
     """
+    defaults = defaults or {}
     name = camera.get('name')
     rtsp = camera.get('rtsp')
     protocol = camera.get('protocol')
@@ -145,16 +150,38 @@ def process_camera(camera, store_path, notifier=None,
     human_detection = camera.get('human_detection', True)
     # 每摄像头的报出阈值（未配置时使用检测方法的默认值）
     conf_threshold = camera.get('human_detection_threshold')
+    # ROI 检测区域：归一化多边形（单个或多个取并集），未配置时整幅画面都参与检测
+    roi = camera.get('roi', defaults.get('roi'))
+    # ROI 开关：关闭时忽略 roi 配置，整幅画面都参与人形检测（标定好的坐标仍可保留）
+    roi_enabled = camera.get('roi_enabled', defaults.get('roi_enabled', True))
+    roi_mode = camera.get('roi_mode', defaults.get('roi_mode', ROI_MODE_FILTER))
+    roi_overlap = camera.get('roi_overlap', defaults.get('roi_overlap'))
+    # 是否在标注图上叠加 ROI 轮廓，便于事后核对标定是否贴合
+    roi_debug = camera.get('roi_debug', defaults.get('roi_debug', False))
     # 检测周期：每隔多少秒抓一帧做检测（决定检测灵敏度的最小粒度）
     capture_cycle = max(camera.get('capture_cycle', 3), 1)
     timelapse_interval = camera.get('timelapse_interval', 60)
     motion_interval = camera.get('motion_interval', 5)
+    if not roi_enabled:
+        roi = None
+        roi_desc = "已关闭(整幅画面参与检测)"
+    elif roi:
+        try:
+            polygons = as_polygon_list(roi)
+            roi_desc = (f"{len(polygons)}个多边形, 共{sum(len(p) for p in polygons)}个顶点, "
+                        f"模式: {roi_mode}")
+        except ValueError as e:
+            roi = None
+            roi_desc = f"配置无效({e}), 整幅画面参与检测"
+    else:
+        roi_desc = "未配置(整幅画面参与检测)"
 
     logging.info(
         f"开始处理摄像头: {name}, 人形检测: {'开启' if human_detection else '关闭'}, "
         f"检测周期: {capture_cycle}秒, "
         f"延时摄影间隔: {timelapse_interval}秒, 人形间隔: {motion_interval}秒, "
-        f"协议: {protocol}, 报出阈值: {conf_threshold if conf_threshold is not None else '默认'}"
+        f"协议: {protocol}, 报出阈值: {conf_threshold if conf_threshold is not None else '默认'}, "
+        f"ROI: {roi_desc}"
     )
 
     last_save_time = 0
@@ -170,7 +197,8 @@ def process_camera(camera, store_path, notifier=None,
             if human_detection:
                 try:
                     boxes = detect_humans(frame, method=detection_method, yolo_model=yolo_model,
-                                          conf_threshold=conf_threshold)
+                                          conf_threshold=conf_threshold, roi=roi,
+                                          roi_mode=roi_mode, roi_overlap=roi_overlap)
                 except Exception as e:
                     logging.error(f"人形检测出错: {e}")
                     boxes = []
@@ -185,7 +213,13 @@ def process_camera(camera, store_path, notifier=None,
                     # 检测到人形时，额外保存带矩形框标注的图像
                     if motion:
                         annotated_filename = generate_filename(name, suffix='detected')
-                        if save_frame(draw_boxes(frame, boxes), store_path, annotated_filename):
+                        annotated = draw_boxes(frame, boxes)
+                        if roi_debug and roi:
+                            # 叠加 ROI 轮廓，便于事后核对标定是否贴合
+                            pixel_roi = normalize_roi(roi, frame.shape[1], frame.shape[0])
+                            if pixel_roi:
+                                annotated = draw_roi(annotated, pixel_roi)
+                        if save_frame(annotated, store_path, annotated_filename):
                             logging.info(f"标注图已保存: {annotated_filename}")
 
             if motion:
@@ -226,6 +260,41 @@ if __name__ == "__main__":
         else:
             logging.info("检测方法: hog")
 
+        # ROI 默认配置（顶层配置对所有摄像头生效，摄像头内同名配置可覆盖）
+        defaults = {
+            'roi': config.get('roi'),
+            'roi_enabled': config.get('roi_enabled', True),
+            'roi_mode': config.get('roi_mode', ROI_MODE_FILTER),
+            'roi_overlap': config.get('roi_overlap'),
+            'roi_debug': config.get('roi_debug', False),
+        }
+
+        # 启动前校验 ROI 配置，避免运行中才发现配置错误
+        for camera in cameras:
+            camera_name = camera.get('name')
+            camera_enabled = camera.get('roi_enabled', defaults['roi_enabled'])
+            if not camera_enabled:
+                logging.info(f"摄像头 {camera_name} 的 ROI 已关闭，整幅画面都参与人形检测")
+                continue
+            camera_mode = camera.get('roi_mode', defaults['roi_mode'])
+            if camera_mode not in (ROI_MODE_FILTER, ROI_MODE_CROP):
+                logging.error(f"摄像头 {camera_name} 的 roi_mode 无效: {camera_mode}，"
+                              f"可选: {ROI_MODE_FILTER} / {ROI_MODE_CROP}")
+                raise SystemExit(1)
+            camera_roi = camera.get('roi', defaults['roi'])
+            if camera_roi is None:
+                logging.info(f"摄像头 {camera_name} 未配置 ROI，整幅画面都参与人形检测")
+                continue
+            try:
+                # 传 1x1 尺寸只为借用其格式校验，不依赖真实图像分辨率
+                polygons = normalize_roi(camera_roi, 1, 1)
+            except ValueError as e:
+                logging.error(f"摄像头 {camera_name} 的 roi 配置无效: {e}")
+                raise SystemExit(1)
+            logging.info(f"摄像头 {camera_name} 已启用检测区域 ROI: "
+                         f"{len(polygons)}个多边形, 共{sum(len(p) for p in polygons)}个顶点, "
+                         f"模式: {camera_mode}")
+
         # 初始化钉钉机器人通知器
         notifier = None
         dingtalk_cfg = config.get('dingtalk', {})
@@ -249,7 +318,7 @@ if __name__ == "__main__":
         for camera in cameras:
             thread = threading.Thread(target=process_camera,
                                       args=(camera, store_path, notifier,
-                                            detection_method, yolo_model))
+                                            detection_method, yolo_model, defaults))
             thread.daemon = True
             threads.append(thread)
             thread.start()
